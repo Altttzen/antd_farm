@@ -15,17 +15,25 @@ class Section(Enum):
     PROFILE = auto()
 
 
-_NAV_SVG = {
+_SIDEBAR_SVG = {
+    Section.HOME:          "svg[aria-label='Home']",
     Section.SEARCH:        "svg[aria-label='Search']",
+    Section.EXPLORE:       "svg[aria-label='Explore']",
+    Section.REELS:         "svg[aria-label='Reels']",
+    Section.MESSAGES:      "svg[aria-label='Messages']",
     Section.NOTIFICATIONS: "svg[aria-label='Notifications']",
     Section.CREATE:        "svg[aria-label='New post']",
 }
 
-_WAIT = {
-    Section.HOME:     "article, div[role='button'][aria-label*='Story by']",
-    Section.REELS:    "div[aria-label='Video player'], video",
-    Section.MESSAGES: "div[aria-label='Thread list'], input[name='searchInput']",
-    Section.EXPLORE:  "a[href*='/p/'], a[href*='/reel/']",
+_WAIT_AFTER = {
+    Section.HOME:          "article, div[role='button'][aria-label*='Story by']",
+    Section.SEARCH:        "input[aria-label='Search input']",
+    Section.EXPLORE:       "a[href*='/p/'], a[href*='/reel/']",
+    Section.REELS:         "video",
+    Section.MESSAGES:      "input[name='searchInput'], div[aria-label='Thread list']",
+    Section.NOTIFICATIONS: "div[role='button'][aria-label='Close']",
+    Section.CREATE:        "div[role='dialog'], input[type='file']",
+    Section.PROFILE:       "header section",
 }
 
 
@@ -51,71 +59,58 @@ class Navigator:
 
 
     async def go_home(self):
-        await self._nav("/")
-        await self._wait_for(Section.HOME)
+        await self._sidebar_click(Section.HOME)
+        await self._wait_after(Section.HOME)
         await self._medium()
         self._current = Section.HOME
 
     async def go_reels(self):
-        await self._nav("/reels/")
-        await self._wait_for(Section.REELS)
+        await self._sidebar_click(Section.REELS)
+        await self._wait_after(Section.REELS)
         await self._medium()
         self._current = Section.REELS
 
     async def go_explore(self):
-        await self._nav("/explore/")
-        await self._wait_for(Section.EXPLORE)
+        await self._sidebar_click(Section.EXPLORE)
+        await self._wait_after(Section.EXPLORE)
         await self._medium()
         self._current = Section.EXPLORE
 
-    async def go_profile(self, username: str | None = None):
-        user = username or self._username
-        if user:
-            await self._nav(f"/{user}/")
-        else:
-            img = await self._page.query_selector(
-                "img[data-testid='user-avatar'], a[role='link'] img[alt*='profile']"
-            )
-            if img:
-                p = await img.evaluate_handle("el => el.closest('a') || el")
-                await p.as_element().click()
-        await self._page.wait_for_load_state("domcontentloaded")
-        await self._medium()
-        self._current = Section.PROFILE
-
     async def go_direct(self):
-        await self._nav("/direct/inbox/")
-        await self._wait_for(Section.MESSAGES)
+        await self._sidebar_click(Section.MESSAGES)
+        await self._wait_after(Section.MESSAGES)
         await self._medium()
         self._current = Section.MESSAGES
 
-
     async def go_search(self):
         await self._sidebar_click(Section.SEARCH)
-        try:
-            await self._page.wait_for_selector(
-                "input[aria-label='Search input']", timeout=5000
-            )
-        except Exception:
-            pass
+        await self._wait_after(Section.SEARCH)
         await self._short()
         self._current = Section.SEARCH
 
     async def go_notifications(self):
         await self._sidebar_click(Section.NOTIFICATIONS)
-        await self._medium()
+        await self._wait_after(Section.NOTIFICATIONS)
+        await self._short()
         self._current = Section.NOTIFICATIONS
 
     async def go_create(self):
         await self._sidebar_click(Section.CREATE)
-        try:
-            await self._page.wait_for_selector(
-                "div[role='dialog'], input[type='file']", timeout=5000
-            )
-        except Exception:
-            pass
+        await self._wait_after(Section.CREATE)
         await self._short()
         self._current = Section.CREATE
+
+    async def go_profile(self, username: str | None = None):
+        user = username or self._username
+
+        if not user or user == self._username:
+            await self._profile_click()
+        else:
+            await self._nav(f"/{user}/")
+
+        await self._wait_after(Section.PROFILE)
+        await self._medium()
+        self._current = Section.PROFILE
 
 
     async def go_to(self, section: Section, **kw):
@@ -123,11 +118,11 @@ class Navigator:
             Section.HOME:          self.go_home,
             Section.REELS:         self.go_reels,
             Section.EXPLORE:       self.go_explore,
-            Section.PROFILE:       lambda: self.go_profile(kw.get("username")),
             Section.MESSAGES:      self.go_direct,
+            Section.SEARCH:        self.go_search,
             Section.NOTIFICATIONS: self.go_notifications,
             Section.CREATE:        self.go_create,
-            Section.SEARCH:        self.go_search,
+            Section.PROFILE:       lambda: self.go_profile(kw.get("username")),
         }
         fn = m.get(section)
         if fn:
@@ -140,7 +135,7 @@ class Navigator:
 
 
     async def is_on(self, section: Section, timeout: int = 3000) -> bool:
-        sel = _WAIT.get(section)
+        sel = _WAIT_AFTER.get(section)
         if not sel:
             return False
         try:
@@ -159,8 +154,8 @@ class Navigator:
         if self._page.url.rstrip("/") != url.rstrip("/"):
             await self._page.goto(url, wait_until="domcontentloaded")
 
-    async def _wait_for(self, section: Section, timeout: int = 10_000):
-        sel = _WAIT.get(section)
+    async def _wait_after(self, section: Section, timeout: int = 10_000):
+        sel = _WAIT_AFTER.get(section)
         if sel:
             try:
                 await self._page.wait_for_selector(sel, timeout=timeout)
@@ -168,9 +163,30 @@ class Navigator:
                 pass
 
     async def _sidebar_click(self, section: Section):
-        svg_sel = _NAV_SVG.get(section)
+        svg_sel = _SIDEBAR_SVG.get(section)
         if not svg_sel:
             return
+
+        try:
+            box = await self._page.evaluate(f"""
+                () => {{
+                    const svg = document.querySelector("{svg_sel}");
+                    if (!svg) return null;
+                    const a = svg.closest('a[role="link"]') || svg.closest('a');
+                    if (!a) return null;
+                    const r = a.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) return null;
+                    return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+                }}
+            """)
+            if box:
+                x = box["x"] + random.uniform(-3, 3)
+                y = box["y"] + random.uniform(-3, 3)
+                await self._page.mouse.click(x, y)
+                await asyncio.sleep(0.8)
+                return
+        except Exception:
+            pass
 
         try:
             anchor = await self._page.evaluate_handle(f"""
@@ -185,34 +201,20 @@ class Navigator:
             el = anchor.as_element()
             if el:
                 await el.dispatch_event("click")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.8)
                 return
         except Exception:
             pass
 
         try:
-            svg = await self._page.query_selector(svg_sel)
-            if svg:
-                await svg.dispatch_event("click")
-                await asyncio.sleep(0.5)
+            label = svg_sel.split("'")[1]  # извлекаем "Reels" из "svg[aria-label='Reels']"
+            link = await self._page.query_selector(
+                f"a[role='link']:has(svg[aria-label='{label}'])"
+            )
+            if link:
+                await link.click(force=True)
+                await asyncio.sleep(0.8)
                 return
-        except Exception:
-            pass
-
-        try:
-            label_text = {
-                Section.SEARCH: "Search",
-                Section.NOTIFICATIONS: "Notifications",
-                Section.CREATE: "New post",
-            }.get(section, "")
-            if label_text:
-                link = await self._page.query_selector(
-                    f"a[role='link']:has(svg[aria-label='{label_text}'])"
-                )
-                if link:
-                    await link.dispatch_event("click")
-                    await asyncio.sleep(0.5)
-                    return
         except Exception:
             pass
 
@@ -227,6 +229,91 @@ class Navigator:
                     }}
                 }}
             """)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.8)
         except Exception:
             pass
+
+    async def _profile_click(self):
+        """
+        Клик по аватарке профиля в sidebar.
+
+        Аватарка — это <img> внутри <a role="link"> внизу sidebar,
+        href указывает на /{username}/.
+        Ищем несколькими способами.
+        """
+        if self._username:
+            try:
+                box = await self._page.evaluate(f"""
+                    () => {{
+                        const a = document.querySelector('a[role="link"][href="/{self._username}/"]');
+                        if (!a) return null;
+                        const r = a.getBoundingClientRect();
+                        if (r.width === 0) return null;
+                        return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+                    }}
+                """)
+                if box:
+                    await self._page.mouse.click(
+                        box["x"] + random.uniform(-3, 3),
+                        box["y"] + random.uniform(-3, 3)
+                    )
+                    await asyncio.sleep(0.8)
+                    return
+            except Exception:
+                pass
+
+        try:
+            box = await self._page.evaluate("""
+                () => {
+                    // Ищем аватарку в sidebar (не в контенте)
+                    const imgs = document.querySelectorAll('nav img[alt], div[role="navigation"] img[alt]');
+                    for (const img of imgs) {
+                        const a = img.closest('a[role="link"]');
+                        if (a && a.getAttribute('href') && a.getAttribute('href') !== '#') {
+                            const r = a.getBoundingClientRect();
+                            if (r.width > 0 && r.y > 400) {  // внизу sidebar
+                                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                            }
+                        }
+                    }
+                    return null;
+                }
+            """)
+            if box:
+                await self._page.mouse.click(
+                    box["x"] + random.uniform(-3, 3),
+                    box["y"] + random.uniform(-3, 3)
+                )
+                await asyncio.sleep(0.8)
+                return
+        except Exception:
+            pass
+
+        try:
+            box = await self._page.evaluate("""
+                () => {
+                    const spans = document.querySelectorAll('a[role="link"] span');
+                    for (const span of spans) {
+                        if (span.textContent?.trim() === 'Profile') {
+                            const a = span.closest('a[role="link"]');
+                            if (a) {
+                                const r = a.getBoundingClientRect();
+                                if (r.width > 0) return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                            }
+                        }
+                    }
+                    return null;
+                }
+            """)
+            if box:
+                await self._page.mouse.click(
+                    box["x"] + random.uniform(-3, 3),
+                    box["y"] + random.uniform(-3, 3)
+                )
+                await asyncio.sleep(0.8)
+                return
+        except Exception:
+            pass
+
+        if self._username:
+            await self._nav(f"/{self._username}/")

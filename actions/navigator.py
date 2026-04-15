@@ -234,13 +234,6 @@ class Navigator:
             pass
 
     async def _profile_click(self):
-        """
-        Клик по аватарке профиля в sidebar.
-
-        Аватарка — это <img> внутри <a role="link"> внизу sidebar,
-        href указывает на /{username}/.
-        Ищем несколькими способами.
-        """
         if self._username:
             try:
                 box = await self._page.evaluate(f"""
@@ -265,7 +258,6 @@ class Navigator:
         try:
             box = await self._page.evaluate("""
                 () => {
-                    // Ищем аватарку в sidebar (не в контенте)
                     const imgs = document.querySelectorAll('nav img[alt], div[role="navigation"] img[alt]');
                     for (const img of imgs) {
                         const a = img.closest('a[role="link"]');

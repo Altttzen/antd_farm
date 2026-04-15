@@ -1,4 +1,3 @@
-# feed_actions.py
 import asyncio
 from playwright.async_api import Page
 
